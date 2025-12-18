@@ -16,9 +16,8 @@ import config
 
 # ================= 配置 =================
 BATCH_SIZE = 256
-NUM_WORKERS = 4  # 0 是最稳的
+NUM_WORKERS = 4  # 0 是最稳的，如果多进程报错请改为0
 TEMP_SAVE_DIR = os.path.join(config.OUTPUT_DIR, 'temp_features')
-
 
 # ========================================
 
@@ -99,35 +98,13 @@ class GazeDataset(Dataset):
         return self.preprocess(patch), self.preprocess(current_img), ts
 
 
-def merge_to_final_file():
-    print("\n" + "=" * 60)
-    print("🔄 Phase 2: Merging all subjects into ONE dictionary file...")
-    print("=" * 60)
-
-    temp_files = glob.glob(os.path.join(TEMP_SAVE_DIR, "*.npy"))
-    final_dict = {}
-
-    for f in tqdm(temp_files, desc="Merging"):
-        subj_id = os.path.basename(f).split('.')[0]
-        try:
-            # item() 是把 numpy 对象转回 python 字典的关键
-            data = np.load(f, allow_pickle=True).item()
-            final_dict[subj_id] = data
-        except Exception as e:
-            print(f"⚠️ Error merging {subj_id}: {e}")
-
-    print(f"💾 Saving final dictionary to: {config.VIDEO_FEATURES_FILE}")
-    np.save(config.VIDEO_FEATURES_FILE, final_dict)
-    print("✅ SUCCESS! All data saved correctly.")
-
-
 def main():
     print("=" * 60)
-    print(f"🚀 MSTNet Feature Extraction (Safe Mode)")
+    print(f"🚀 MSTNet Feature Extraction (Safe Mode - No Merge)")
     print("=" * 60)
 
+    # 只创建临时文件夹，不再创建大文件目录
     os.makedirs(TEMP_SAVE_DIR, exist_ok=True)
-    os.makedirs(os.path.dirname(config.VIDEO_FEATURES_FILE), exist_ok=True)
 
     device = config.DEVICE if torch.cuda.is_available() else "cpu"
     print(f"🔧 Device: {device} | Batch: {BATCH_SIZE}")
@@ -137,17 +114,19 @@ def main():
     model.eval()
 
     csv_files = glob.glob(os.path.join(config.CSV_DIR, '*.csv'))
+    print(f"📂 Found {len(csv_files)} CSV files to process.")
 
     # === 阶段 1：分片提取 ===
-    for csv_path in tqdm(csv_files, desc="Processing"):
+    for csv_path in tqdm(csv_files, desc="Extracting Features"):
         subject_id = os.path.basename(csv_path).split('.')[0]
         save_path = os.path.join(TEMP_SAVE_DIR, f"{subject_id}.npy")
 
-        if os.path.exists(save_path): continue  # 断点续传
+        # 断点续传：如果文件已存在且大小正常，跳过
+        if os.path.exists(save_path):
+            continue
 
         try:
             df = pd.read_csv(csv_path)
-            # 这里 Dataset 初始化时会自动过滤 NaN
             dataset = GazeDataset(df, config.FRAME_DIR, preprocess, config.CROP_SIZE, config.VIDEO_W, config.VIDEO_H)
 
             if len(dataset) == 0: continue
@@ -166,9 +145,11 @@ def main():
                         l = model.encode_image(b_local)
                         g = model.encode_image(b_global)
 
+                        # 归一化特征
                         l /= l.norm(dim=-1, keepdim=True)
                         g /= g.norm(dim=-1, keepdim=True)
 
+                        # 转存为 float16 节省空间
                         local_list.append(l.cpu().numpy().astype(np.float16))
                         global_list.append(g.cpu().numpy().astype(np.float16))
                         timestamp_list.append(b_ts.numpy().astype(np.float64))
@@ -181,16 +162,19 @@ def main():
                 }
                 np.save(save_path, data_dict)
 
+            # 内存回收
             del dataset, dataloader, local_list, global_list, timestamp_list, data_dict, df
             gc.collect()
             torch.cuda.empty_cache()
 
         except Exception as e:
-            print(f"\n❌ Error {subject_id}: {e}")
+            print(f"\n❌ Error processing {subject_id}: {e}")
             continue
 
-    # === 阶段 2：合并 ===
-    merge_to_final_file()
+    print("\n" + "=" * 60)
+    print("✅ Extraction Finished! All features saved in temp folder.")
+    print(f"📂 Location: {TEMP_SAVE_DIR}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
