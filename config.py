@@ -31,7 +31,10 @@ PHYSIO_INPUT_DIM = 3      # Physio Dim: (x, y, t)
 
 # 瓶颈层与融合
 USE_BOTTLENECK = True     # 开启 MSTNet 核心策略
-BOTTLENECK_DIM_motion = 64       # 压缩到 64 维
+# BOTTLENECK_DIM_motion = 64       # 压缩到 64 维
+BOTTLENECK_DIM_MOTION = 16
+BOTTLENECK_DIM_GNN = 32
+GNN_NODE_DIM = 12
 HIDDEN_DIM = 128          # Transformer 内部维度
 
 # Transformer 细节

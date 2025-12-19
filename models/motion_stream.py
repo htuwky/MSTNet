@@ -31,7 +31,7 @@ class MotionStream(nn.Module):
         input_dim = 6
         hidden_dim = config.HIDDEN_DIM  # 128
         # --- 修改点：bottleneck 压低至 16 ---
-        self.bottleneck_dim = 16
+        self.bottleneck_dim = config.BOTTLENECK_DIM_MOTION
         dropout_rate = config.DROPOUT
 
         self.input_norm = nn.LayerNorm(input_dim)
