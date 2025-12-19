@@ -11,9 +11,9 @@ import config
 def analyze_sequence_lengths():
     # === 第一部分：数据扫描与统计 ===
 
-    # 指向临时文件夹 (避免读取大文件导致的 MemoryError)
-    temp_dir = os.path.join(config.OUTPUT_DIR, 'temp_features')
-    print(f"🚀 正在扫描特征文件夹: {temp_dir} ...")
+    # [更新] 直接从 config 读取临时文件夹路径
+    temp_dir = config.TEMP_FEATURE_DIR
+    print(f"🚀 [Check] 正在扫描特征文件夹: {temp_dir} ...")
 
     if not os.path.exists(temp_dir):
         print("❌ 错误: 找不到 temp_features 文件夹！")
@@ -23,24 +23,26 @@ def analyze_sequence_lengths():
     npy_files = glob.glob(os.path.join(temp_dir, "*.npy"))
 
     if len(npy_files) == 0:
-        print("❌ 文件夹为空，请检查特征提取是否成功。")
+        print("❌ 文件夹为空！(请检查您的特征提取是否真的完成了)")
         return
 
-    print(f"✅ 发现 {len(npy_files)} 个独立特征文件。开始逐个分析采样率...\n")
+    print(f"✅ 成功找到 {len(npy_files)} 个特征文件！开始分析...\n")
 
     seq_lengths = []
     fps_list = []
 
-    # 遍历文件
+    # 遍历文件 (不使用 tqdm 也可以，反正很快)
     for f_path in npy_files:
         try:
             content = np.load(f_path, allow_pickle=True).item()
 
-            # 获取序列长度
+            # content 结构: {'local': ..., 'global': ..., 'timestamp': ...}
+
+            # 1. 检查序列长度
             seq_len = content['local'].shape[0]
             seq_lengths.append(seq_len)
 
-            # 计算真实采样率
+            # 2. 检查真实采样率
             timestamps = content['timestamp']
             if len(timestamps) > 1:
                 duration = timestamps[-1] - timestamps[0]
@@ -49,39 +51,36 @@ def analyze_sequence_lengths():
                     fps_list.append(real_fps)
 
         except Exception as e:
-            # 忽略损坏的个别文件
-            pass
+            print(f"⚠️ 文件损坏: {os.path.basename(f_path)} - {e}")
 
     if not seq_lengths:
         print("❌ 未提取到有效数据。")
         return
 
-    # 计算全局平均 FPS
-    avg_fps = np.mean(fps_list) if fps_list else 60.0  # 默认兜底 60
-
-    # 打印基础统计
     seq_lengths = np.array(seq_lengths)
+    avg_fps = np.mean(fps_list) if fps_list else 60.0
+
     print("=" * 50)
-    print(f"📊 基础数据统计 (样本数: {len(seq_lengths)})")
-    print(f"   平均长度: {np.mean(seq_lengths):.0f} 点")
-    print(f"   真实眼动采样率: {avg_fps:.2f} Hz")
+    print(f"📊 [数据验收报告]")
+    print("=" * 50)
+    print(f"有效样本数: {len(seq_lengths)} (预期: {config.NUM_SIMULATED_PEOPLE})")
+    print(f"数据长度: {np.min(seq_lengths)} ~ {np.max(seq_lengths)} 点")
+    print(f"平均长度: {np.mean(seq_lengths):.0f} 点")
+    print(f"真实采样率: {avg_fps:.2f} Hz")
     print("=" * 50)
 
-    # === 第二部分：生成您定制的决策表格 ===
+    # === 第二部分：Transformer 窗口决策 ===
 
     print("\n" + "=" * 110)
     print("💡 [Transformer 窗口长度决策建议 (工程优化版)]")
     print("=" * 110)
 
-    # 表头定义
     headers = ["推荐 Seq_Len", "是否 2^n?", "对应时长(s)", "覆盖帧数", "评价"]
-    # 格式化字符串 (对齐调整)
     row_fmt = "{:<14} | {:<16} | {:<12} | {:<12} | {}"
 
     print(row_fmt.format(*headers))
     print("-" * 110)
 
-    # 您的定制文案
     recommendations = [
         (128, "极速模式。虽比64帧短一点，但计算最快，适合快速实验。"),
         (160, "精准对齐模式。最接近您想要的“64帧窗口”，且符合 32 倍数优化。"),
@@ -91,21 +90,12 @@ def analyze_sequence_lengths():
     ]
 
     for seq_len, comment in recommendations:
-        # 1. 判断是否 2 的幂次方
-        # 位运算技巧: n & (n-1) == 0 表示是 2 的幂
         is_power_of_2 = (seq_len & (seq_len - 1) == 0) and seq_len > 0
-        if is_power_of_2:
-            power_str = f"✅ 是 (2^{int(np.log2(seq_len))})"
-        else:
-            power_str = "❌ (32倍数)"
+        power_str = f"✅ 是 (2^{int(np.log2(seq_len))})" if is_power_of_2 else "❌ (32倍数)"
 
-        # 2. 计算对应时长
         duration = seq_len / avg_fps
-
-        # 3. 计算覆盖视频帧数
         video_frames = duration * config.VIDEO_FPS
 
-        # 4. 输出行
         print(row_fmt.format(
             str(seq_len),
             power_str,

@@ -14,12 +14,13 @@ import gc
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
-# ================= 配置 =================
-BATCH_SIZE = 256
-NUM_WORKERS = 4  # 0 是最稳的，如果多进程报错请改为0
-TEMP_SAVE_DIR = os.path.join(config.OUTPUT_DIR, 'temp_features')
+# === 完全从 Config 读取配置 ===
+BATCH_SIZE = config.EXTRACT_BATCH_SIZE  # 使用提取专用的 Batch
+NUM_WORKERS = config.NUM_WORKERS
+TEMP_SAVE_DIR = config.TEMP_FEATURE_DIR
 
-# ========================================
+
+# ==============================
 
 def get_frame_idx(timestamp):
     return int(timestamp * config.VIDEO_FPS) + 1
@@ -27,7 +28,7 @@ def get_frame_idx(timestamp):
 
 class GazeDataset(Dataset):
     def __init__(self, df, frame_dir, preprocess, crop_size, video_w, video_h):
-        # [关键修改] 过滤掉包含 NaN (空值) 的行，防止眨眼数据导致程序崩溃
+        # 过滤空值
         self.data = df.dropna(subset=['Gaze_X', 'Gaze_Y', 'Timestamp']).to_dict('records')
         self.frame_dir = frame_dir
         self.preprocess = preprocess
@@ -42,10 +43,9 @@ class GazeDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data[idx]
         ts = row['Timestamp']
-
         target_frame_idx = get_frame_idx(ts)
 
-        # --- 1. 读图 ---
+        # 1. 读图
         current_img = self.cache['img']
         if self.cache['idx'] != target_frame_idx:
             frame_path = os.path.join(self.frame_dir, f"frame_{target_frame_idx:05d}.png")
@@ -59,38 +59,28 @@ class GazeDataset(Dataset):
             else:
                 if current_img is None: current_img = Image.new("RGB", (self.video_w, self.video_h), (0, 0, 0))
 
-        # --- 2. 坐标处理 (处理溢出) ---
+        # 2. 坐标
         w, h = current_img.size
-        # 确保坐标是有效的 float，防止奇怪的格式
         try:
-            raw_x = float(row['Gaze_X'])
-            raw_y = float(row['Gaze_Y'])
+            raw_x, raw_y = float(row['Gaze_X']), float(row['Gaze_Y'])
         except:
-            raw_x, raw_y = 0.5, 0.5  # 极端容错：放中间
+            raw_x, raw_y = 0.5, 0.5
 
         gx = int(raw_x * self.video_w)
         gy = int(raw_y * self.video_h)
 
-        # --- 3. 安全裁剪 (Safe Crop - Zero Padding) ---
-        # 如果坐标导致裁剪框超出了图像边界，这里会自动补黑边
+        # 3. 裁剪 (Zero Padding)
         half = self.crop_size // 2
-        # 快速判断：如果在边界内
         if gx - half >= 0 and gy - half >= 0 and gx + half <= w and gy + half <= h:
             patch = current_img.crop((gx - half, gy - half, gx + half, gy + half))
         else:
-            # 如果在边界外：创建全黑底图，把能切到的部分贴上去
             patch = Image.new("RGB", (self.crop_size, self.crop_size), (0, 0, 0))
-
-            # 计算原图上的裁剪区域
             src_left = max(0, gx - half)
             src_top = max(0, gy - half)
             src_right = min(w, gx + half)
             src_bottom = min(h, gy + half)
-
-            # 计算贴到黑图上的位置
             dst_left = max(0, -(gx - half))
             dst_top = max(0, -(gy - half))
-
             if src_right > src_left and src_bottom > src_top:
                 crop_part = current_img.crop((src_left, src_top, src_right, src_bottom))
                 patch.paste(crop_part, (dst_left, dst_top))
@@ -100,40 +90,33 @@ class GazeDataset(Dataset):
 
 def main():
     print("=" * 60)
-    print(f"🚀 MSTNet Feature Extraction (Safe Mode - No Merge)")
+    print(f"🚀 MSTNet Feature Extraction (Fully Decoupled)")
     print("=" * 60)
+    config.print_config()
 
-    # 只创建临时文件夹，不再创建大文件目录
     os.makedirs(TEMP_SAVE_DIR, exist_ok=True)
 
-    device = config.DEVICE if torch.cuda.is_available() else "cpu"
-    print(f"🔧 Device: {device} | Batch: {BATCH_SIZE}")
-
-    print("⏳ Loading CLIP model...")
+    device = config.DEVICE
+    print(f"⏳ Loading CLIP ({config.CLIP_MODEL_NAME})...")
     model, preprocess = clip.load(config.CLIP_MODEL_NAME, device=device)
     model.eval()
 
     csv_files = glob.glob(os.path.join(config.CSV_DIR, '*.csv'))
-    print(f"📂 Found {len(csv_files)} CSV files to process.")
+    print(f"📂 Found {len(csv_files)} CSV files.")
 
-    # === 阶段 1：分片提取 ===
-    for csv_path in tqdm(csv_files, desc="Extracting Features"):
+    for csv_path in tqdm(csv_files, desc="Processing"):
         subject_id = os.path.basename(csv_path).split('.')[0]
         save_path = os.path.join(TEMP_SAVE_DIR, f"{subject_id}.npy")
 
-        # 断点续传：如果文件已存在且大小正常，跳过
-        if os.path.exists(save_path):
-            continue
+        if os.path.exists(save_path): continue
 
         try:
             df = pd.read_csv(csv_path)
             dataset = GazeDataset(df, config.FRAME_DIR, preprocess, config.CROP_SIZE, config.VIDEO_W, config.VIDEO_H)
-
             if len(dataset) == 0: continue
 
             dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS,
                                     pin_memory=False)
-
             local_list, global_list, timestamp_list = [], [], []
 
             with torch.no_grad():
@@ -145,11 +128,9 @@ def main():
                         l = model.encode_image(b_local)
                         g = model.encode_image(b_global)
 
-                        # 归一化特征
                         l /= l.norm(dim=-1, keepdim=True)
                         g /= g.norm(dim=-1, keepdim=True)
 
-                        # 转存为 float16 节省空间
                         local_list.append(l.cpu().numpy().astype(np.float16))
                         global_list.append(g.cpu().numpy().astype(np.float16))
                         timestamp_list.append(b_ts.numpy().astype(np.float64))
@@ -162,19 +143,15 @@ def main():
                 }
                 np.save(save_path, data_dict)
 
-            # 内存回收
             del dataset, dataloader, local_list, global_list, timestamp_list, data_dict, df
             gc.collect()
             torch.cuda.empty_cache()
 
         except Exception as e:
-            print(f"\n❌ Error processing {subject_id}: {e}")
+            print(f"❌ Error {subject_id}: {e}")
             continue
 
-    print("\n" + "=" * 60)
-    print("✅ Extraction Finished! All features saved in temp folder.")
-    print(f"📂 Location: {TEMP_SAVE_DIR}")
-    print("=" * 60)
+    print("✅ All features extracted to temp folder!")
 
 
 if __name__ == "__main__":
