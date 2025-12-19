@@ -62,7 +62,9 @@ class MSTNetDataset(Dataset):
         global_feat = v_data['global']  # [Seq, 512] -> 用于 Temporal
         motion_feat = m_data['motion']  # [Seq, 6]   -> 用于 Motion 流
         physio_feat = m_data['physio']  # [Seq, 3] (x, y, t) -> 用于 Temporal 位置和 GNN 构图
-
+        # 将 physio_feat 的第 3 列 (Index 2) 从原始秒数转换为 0-1 比例
+        # 这样 (x, y, t) 全部锁死在 [0, 1] 之间
+        physio_feat[:, 2] /= config.VIDEO_DURATION
         # 标签逻辑：假设前一半序号为健康(0)，后一半为患病(1)
         label = 1 if int(subject_id) > (config.NUM_SIMULATED_PEOPLE // 2) else 0
 
