@@ -24,15 +24,9 @@ def get_frame_idx(timestamp):
     """
     针对 23 FPS 且文件名从 1 开始的精确对齐逻辑
     """
-    # 1. 四舍五入找到最接近的离散帧索引 (0-based)
-    # 比如 ts=0.04s, 0.04*23=0.92, round后是 1
-    # 比如 ts=0.01s, 0.01*23=0.23, round后是 0
-    idx_0_based = int(round(timestamp * config.VIDEO_FPS))
 
-    # 2. 因为文件名是从 1 开始的，所以索引要加 1
-    # 这样：0.0s -> 第 1 帧
-    #      0.043s (1/23s) -> 第 2 帧
-    return idx_0_based + 1
+    return int(timestamp * config.VIDEO_FPS) + 1
+
 
 
 def precompute_frames_flow(frame_dir):
@@ -113,8 +107,7 @@ def main():
         save_path = os.path.join(TEMP_SAVE_DIR, f"{subject_id}_motion.npy")
 
         # 如果已有，跳过
-        if os.path.exists(save_path): continue
-
+        # if os.path.exists(save_path): continue
         try:
             df = pd.read_csv(csv_path)
             df = df.dropna(subset=['Gaze_X', 'Gaze_Y', 'Timestamp'])
