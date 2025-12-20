@@ -20,22 +20,30 @@ class FourierEmbedding(nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        # 从 config 读取缩放比例
         self.scale = scale if scale is not None else config.FOURIER_SCALE
 
-        # 使用固定的随机初始化，确保编码空间的稳定性
-        B_mat = torch.randn(input_dim, hidden_dim // 2) * self.scale
-        self.register_buffer('B', B_mat)
+        # ==================== 修改部分 ====================
+        # 创建一个独立的随机数生成器并固定种子（例如 42）
+        # 这样无论在哪个服务器运行，B 矩阵的内容永远一致
+        gen = torch.Generator().manual_seed(42)
 
+        # 使用该生成器创建随机矩阵 B
+        B_mat = torch.randn(
+            input_dim,
+            hidden_dim // 2,
+            generator=gen
+        ) * self.scale
+        # =================================================
+
+        self.register_buffer('B', B_mat)
         self.proj = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim)  # 增强数值稳定性
+            nn.LayerNorm(hidden_dim)
         )
 
     def forward(self, x):
-        # x_proj: 2 * pi * x * B
+        # x_proj: [Batch, Seq, hidden_dim//2]
         x_proj = 2 * math.pi * x @ self.B
-        # 拼接 sin 和 cos 并映射
         out = torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
         return self.proj(out)
 
