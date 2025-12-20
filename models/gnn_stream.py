@@ -60,8 +60,8 @@ class GNNStream(nn.Module):
         h = self.node_encoder(local_feat)  # [Batch, Seq, 12]
 
         # 显存优化：计算距离矩阵
-        with torch.no_grad():
-            dist = torch.cdist(coords[:, :, :2], coords[:, :, :2], p=2)  # [B, S, S]
+
+        dist = torch.cdist(coords[:, :, :2], coords[:, :, :2], p=2)  # [B, S, S]
 
         # 空间衰减系数：控制图连接紧密度
         spatial_adj = torch.exp(-dist * torch.abs(self.spatial_gamma))

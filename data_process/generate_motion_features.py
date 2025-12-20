@@ -145,8 +145,8 @@ def main():
                 if idx == 0:
                     vx, vy = 0.0, 0.0
                 else:
-                    vx = (gx - prev_x) * FLOW_W
-                    vy = (gy - prev_y) * FLOW_H
+                    vx = (gx - prev_x)
+                    vy = (gy - prev_y)
 
                 prev_x, prev_y = gx, gy
 
